@@ -1,106 +1,120 @@
-<!DOCTYPE html><html lang="en">
+<!DOCTYPE html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Options Expiration Calculator</title>
+  <title>Options Strike & Expiration Calculator</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 30px; max-width: 700px; }
-    label, input, select, button { display: block; width: 100%; margin: 10px 0; }
-    .result { font-weight: bold; margin-top: 20px; white-space: pre-wrap; }
-    canvas { margin-top: 30px; }
+    body { font-family: Arial, sans-serif; margin: 20px; max-width: 600px; }
+    label, select, input, button { display: block; width: 100%; margin: 10px 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+    .error { color: red; }
   </style>
 </head>
 <body>
-  <h2>Options Expiration & Strike Suggestion Calculator</h2><label for="stockPrice">Stock Price ($):</label> <input type="number" id="stockPrice" step="0.01" required>
+  <h2>Options Strike & Expiration Suggestion</h2>
 
-<label for="iv">Implied Volatility (%):</label> <input type="number" id="iv" step="0.01" required>
+  <label>Stock Price ($):<input type="number" id="stockPrice" step="0.01"></label>
+  <label>Implied Volatility (%):<input type="number" id="iv" step="0.1"></label>
+  <label>Trade Type:
+    <select id="direction">
+      <option value="call">Call (Bullish)</option>
+      <option value="put">Put (Bearish)</option>
+    </select>
+  </label>
+  <button id="runBtn">Calculate Suggestions</button>
+  <div id="error" class="error"></div>
 
-<label for="expectedMove">Expected Move ($):</label> <input type="number" id="expectedMove" step="0.01" required>
+  <table id="results" hidden>
+    <thead>
+      <tr>
+        <th>Expiration</th>
+        <th>Days</th>
+        <th>1σ Move ($)</th>
+        <th>Suggested Strike</th>
+        <th>Est. Premium</th>
+        <th>Prob. ITM (%)</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 
-<label for="direction">Trade Direction:</label> <select id="direction"> <option value="call">Call (Bullish)</option> <option value="put">Put (Bearish)</option> </select>
+  <script>
+    // === Black‑Scholes (standard implementation) ===
+    function normCDF(x) {
+      return (1 + Math.erf(x/Math.sqrt(2))) / 2;
+    }
+    function bsPrice(S, K, r, q, iv, T, isCall) {
+      const d1 = (Math.log(S/K) + (r - q + 0.5*iv*iv)*T) / (iv*Math.sqrt(T));
+      const d2 = d1 - iv*Math.sqrt(T);
+      if (isCall)
+        return S*Math.exp(-q*T)*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2);
+      else
+        return K*Math.exp(-r*T)*normCDF(-d2) - S*Math.exp(-q*T)*normCDF(-d1);
+    }
 
-<button onclick="calculateExpiration()">Calculate Best Expiration & Strike</button>
+    // === 1σ move over days ===
+    function stdDevMove(S, iv, days) {
+      return S * iv * Math.sqrt(days/365);
+    }
 
-  <div class="result" id="result"></div><canvas id="chart" width="600" height="300"></canvas>
-
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>  <script>
-    let chart;
-
-    function calculateExpiration() {
+    // === Main ===
+    document.getElementById("runBtn").onclick = async () => {
       const S = parseFloat(document.getElementById("stockPrice").value);
-      const IV = parseFloat(document.getElementById("iv").value) / 100;
-      const move = parseFloat(document.getElementById("expectedMove").value);
-      const direction = document.getElementById("direction").value;
-
-      if (!S || !IV || !move) {
-        document.getElementById("result").innerText = "Please fill all fields correctly.";
+      const IV = parseFloat(document.getElementById("iv").value)/100;
+      const isCall = document.getElementById("direction").value === "call";
+      const errorDiv = document.getElementById("error");
+      const tbl = document.getElementById("results");
+      errorDiv.textContent = "";
+      tbl.hidden = true;
+      if (!S || !IV) {
+        errorDiv.textContent = "Please enter valid price and IV.";
         return;
       }
 
-      const days = Math.pow((move / (S * IV)), 2) * 365;
-      const roundedDays = Math.round(days);
-      let recommendation = "";
+      // Example expirations – in practice fetch these from an API
+      const today = new Date();
+      const exDates = [
+        addDays(today, 1),
+        addDays(today, 5),
+        addDays(today, 14),
+        addDays(today, 30),
+      ];
 
-      if (roundedDays <= 1) {
-        recommendation = "Use same-day (0DTE) or 1DTE options.";
-      } else if (roundedDays <= 5) {
-        recommendation = "Use weekly options with 3–5 DTE.";
-      } else if (roundedDays <= 21) {
-        recommendation = "Use 1–3 week expirations (ideal for swing trades).";
-      } else {
-        recommendation = "Consider monthly or longer expirations (position trading or hedging).";
-      }
+      const r = 0.05, q = 0.00;  // assume 5% interest, no dividend
+      const tbody = tbl.querySelector("tbody");
+      tbody.innerHTML = "";
 
-      let strikeSuggestion = "";
-      let strikePrice = 0;
-      let breakeven = 0;
-      let estimatedPremium = (S * IV * Math.sqrt(roundedDays / 365)).toFixed(2);
+      exDates.forEach(exp => {
+        const days = (exp - today)/(1000*60*60*24);
+        const T = days/365;
+        const mv = stdDevMove(S, IV, days);
+        // for a 68%‐probability OTM, target strike = S ± mv
+        const strike = isCall ? S + mv : S - mv;
+        const premium = bsPrice(S, strike, r, q, IV, T, isCall).toFixed(2);
+        // prob of expiring ITM:
+        const d2 = (Math.log(S/strike) + (r - q - 0.5*IV*IV)*T)/(IV*Math.sqrt(T));
+        const probITM = (isCall ? normCDF(d2) : normCDF(-d2)) * 100;
 
-      if (direction === "call") {
-        strikePrice = S + move;
-        breakeven = parseFloat(strikePrice) + parseFloat(estimatedPremium);
-        strikeSuggestion = `Suggested Call Strike: $${strikePrice.toFixed(2)} (target OTM)`;
-      } else {
-        strikePrice = S - move;
-        breakeven = parseFloat(strikePrice) - parseFloat(estimatedPremium);
-        strikeSuggestion = `Suggested Put Strike: $${strikePrice.toFixed(2)} (target OTM)`;
-      }
-
-      const riskReward = `Estimated Premium: $${estimatedPremium}\nBreakeven Price: $${breakeven.toFixed(2)}`;
-
-      document.getElementById("result").innerText =
-        `Estimated time for move: ${roundedDays} days\n` +
-        `Recommendation: ${recommendation}\n` +
-        `${strikeSuggestion}\n` +
-        `${riskReward}`;
-
-      drawChart(S, strikePrice, breakeven);
-    }
-
-    function drawChart(stockPrice, strikePrice, breakeven) {
-      const ctx = document.getElementById("chart").getContext("2d");
-      const labels = ["Current Price", "Strike Price", "Breakeven"];
-      const data = [stockPrice, strikePrice, breakeven];
-
-      if (chart) chart.destroy();
-
-      chart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels: labels,
-          datasets: [{
-            label: 'Price ($)',
-            data: data,
-            backgroundColor: ['#4CAF50', '#FF5733', '#3366CC']
-          }]
-        },
-        options: {
-          scales: {
-            y: {
-              beginAtZero: false
-            }
-          }
-        }
+        const row = `<tr>
+          <td>${exp.toISOString().slice(0,10)}</td>
+          <td>${Math.round(days)}</td>
+          <td>${mv.toFixed(2)}</td>
+          <td>${strike.toFixed(2)}</td>
+          <td>${premium}</td>
+          <td>${probITM.toFixed(1)}</td>
+        </tr>`;
+        tbody.insertAdjacentHTML("beforeend", row);
       });
+
+      tbl.hidden = false;
+    };
+
+    function addDays(d, n) {
+      const x = new Date(d);
+      x.setDate(d.getDate() + n);
+      return x;
     }
-  </script></body>
+  </script>
+</body>
 </html>
