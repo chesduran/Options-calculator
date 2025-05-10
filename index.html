@@ -16,8 +16,6 @@
 
 <label for="expectedMove">Expected Move ($):</label> <input type="number" id="expectedMove" step="0.01" required>
 
-<label for="premium">Option Premium Paid ($):</label> <input type="number" id="premium" step="0.01" required>
-
 <label for="direction">Trade Direction:</label> <select id="direction"> <option value="call">Call (Bullish)</option> <option value="put">Put (Bearish)</option> </select>
 
 <button onclick="calculateExpiration()">Calculate Best Expiration & Strike</button>
@@ -31,10 +29,9 @@
       const S = parseFloat(document.getElementById("stockPrice").value);
       const IV = parseFloat(document.getElementById("iv").value) / 100;
       const move = parseFloat(document.getElementById("expectedMove").value);
-      const premium = parseFloat(document.getElementById("premium").value);
       const direction = document.getElementById("direction").value;
 
-      if (!S || !IV || !move || !premium) {
+      if (!S || !IV || !move) {
         document.getElementById("result").innerText = "Please fill all fields correctly.";
         return;
       }
@@ -56,29 +53,25 @@
       let strikeSuggestion = "";
       let strikePrice = 0;
       let breakeven = 0;
-      let potentialProfit = 0;
+      let estimatedPremium = (S * IV * Math.sqrt(roundedDays / 365)).toFixed(2);
 
       if (direction === "call") {
         strikePrice = S + move;
-        breakeven = strikePrice + premium;
-        potentialProfit = Math.max(0, (S + move) - breakeven);
+        breakeven = parseFloat(strikePrice) + parseFloat(estimatedPremium);
         strikeSuggestion = `Suggested Call Strike: $${strikePrice.toFixed(2)} (target OTM)`;
       } else {
         strikePrice = S - move;
-        breakeven = strikePrice - premium;
-        potentialProfit = Math.max(0, breakeven - (S - move));
+        breakeven = parseFloat(strikePrice) - parseFloat(estimatedPremium);
         strikeSuggestion = `Suggested Put Strike: $${strikePrice.toFixed(2)} (target OTM)`;
       }
 
-      const riskReward = `Tip: Use tight spreads, check volume > 100, and delta ~0.3–0.5 for balance of cost and probability.`;
-      const profitInfo = `Breakeven Price: $${breakeven.toFixed(2)}\nPotential Profit (if move hits target): $${potentialProfit.toFixed(2)}`;
+      const riskReward = `Estimated Premium: $${estimatedPremium}\nBreakeven Price: $${breakeven.toFixed(2)}`;
 
       document.getElementById("result").innerText =
         `Estimated time for move: ${roundedDays} days\n` +
         `Recommendation: ${recommendation}\n` +
         `${strikeSuggestion}\n` +
-        `${riskReward}\n` +
-        `${profitInfo}`;
+        `${riskReward}`;
 
       drawChart(S, strikePrice, breakeven);
     }
