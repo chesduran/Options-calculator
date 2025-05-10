@@ -2,19 +2,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Options Strike & Expiration Calculator</title>
+  <title>Options Strike & Trend Predictor</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px auto; max-width: 600px; }
     label, select, input, button { display: block; width: 100%; margin: 10px 0; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
     th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
     .error { color: red; }
+    .trend { font-size: 1.2em; margin: 20px 0; font-weight: bold; }
   </style>
 </head>
 <body>
-  <h2>Options Strike & Expiration Suggestion</h2><label>Stock Price ($):<input type="number" id="stockPrice" step="0.01" /></label> <label>Implied Volatility (%):<input type="number" id="iv" step="0.1" /></label> <label>Trade Type: <select id="direction"> <option value="call">Call (Bullish)</option> <option value="put">Put (Bearish)</option> </select> </label> <button id="runBtn">Calculate Suggestions</button>
+  <h2>Options Strike & Trend Predictor</h2><label>Symbol:<input type="text" id="symbol" placeholder="e.g. AAPL" /></label> <label>Implied Volatility (%):<input type="number" id="iv" step="0.1" /></label> <label>Trade Type: <select id="direction"> <option value="call">Call (Bullish)</option> <option value="put">Put (Bearish)</option> </select> </label> <button id="runBtn">Load Chain & Calculate</button>
 
-  <div id="error" class="error"></div>  <table id="results" hidden>
+  <div id="error" class="error"></div>
+  <div id="trendSignal" class="trend"></div>  <table id="results" hidden>
     <thead>
       <tr>
         <th>Expiration</th>
@@ -27,50 +29,70 @@
     </thead>
     <tbody></tbody>
   </table>  <script>
-    // error‑function (erf) polyfill for normCDF
-    function erf(x) {
-      const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429, p=0.3275911;
-      const sign = x<0?-1:1; x = Math.abs(x);
-      const t = 1/(1+p*x);
-      const y = 1 - ((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
-      return sign*y;
-    }
-    function normCDF(x) { return (1 + erf(x/Math.sqrt(2))) / 2; }
-
-    function bsPrice(S,K,r,q,iv,T,isCall) {
-      const d1=(Math.log(S/K)+(r-q+0.5*iv*iv)*T)/(iv*Math.sqrt(T));
-      const d2=d1-iv*Math.sqrt(T);
-      return isCall
-        ? S*Math.exp(-q*T)*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2)
-        : K*Math.exp(-r*T)*normCDF(-d2) - S*Math.exp(-q*T)*normCDF(-d1);
-    }
+    // erf polyfill
+    function erf(x) { const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911; const sign=x<0?-1:1; x=Math.abs(x); const t=1/(1+p*x); const y=1-((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t*Math.exp(-x*x); return sign*y; }
+    function normCDF(x) { return (1+erf(x/Math.sqrt(2)))/2; }
+    function bsPrice(S,K,r,q,iv,T,isCall){ const d1=(Math.log(S/K)+(r-q+0.5*iv*iv)*T)/(iv*Math.sqrt(T)); const d2=d1-iv*Math.sqrt(T); return isCall? S*Math.exp(-q*T)*normCDF(d1)-K*Math.exp(-r*T)*normCDF(d2) : K*Math.exp(-r*T)*normCDF(-d2)-S*Math.exp(-q*T)*normCDF(-d1); }
     function stdDevMove(S,iv,days){ return S*iv*Math.sqrt(days/365); }
 
-    document.getElementById("runBtn").onclick = () => {
-      const S = parseFloat(document.getElementById("stockPrice").value);
-      const IV = parseFloat(document.getElementById("iv").value)/100;
+    async function fetchOptionChain(symbol){
+      const apiKey = "<YOUR_POLYGON_API_KEY>";
+      const url = `https://api.polygon.io/v3/snapshot/options/${symbol.toUpperCase()}?apiKey=${apiKey}`;
+      const resp = await fetch(url);
+      if(!resp.ok) throw new Error("Failed to fetch option chain");
+      const json = await resp.json();
+      return json.results;
+    }
+
+    document.getElementById("runBtn").onclick = async () => {
+      const sym = document.getElementById("symbol").value.trim();
+      const IVinput = parseFloat(document.getElementById("iv").value)/100;
       const isCall = document.getElementById("direction").value === "call";
-      const err = document.getElementById("error"); err.textContent="";
-      const tbl = document.getElementById("results"); tbl.hidden=true;
-      if (!S || !IV) { err.textContent="Please enter valid price & IV."; return; }
+      const err = document.getElementById("error"); err.textContent = "";
+      const trendDiv = document.getElementById("trendSignal"); trendDiv.textContent = "";
+      const tbl = document.getElementById("results"); tbl.hidden = true;
+      if(!sym){ err.textContent = "Enter a symbol."; return; }
+      try{
+        const chain = await fetchOptionChain(sym);
+        if(!chain.length) throw new Error("No options data available");
+        const S = chain[0].underlying_price;
+        const r = 0.01, q = 0;
 
-      const today = new Date();
-      const exDays = [1,5,14,30];
-      const r=0.05, q=0;
-      const body = tbl.querySelector("tbody"); body.innerHTML = "";
+        // aggregate sentiment by delta*open_interest
+        let weightedSum = 0, totalOi = 0;
+        chain.forEach(c => {
+          const delta = c.greeks.delta * (c.contract_type==="put"? -1:1);
+          weightedSum += delta * c.open_interest;
+          totalOi += c.open_interest;
+        });
+        const sentiment = weightedSum/totalOi;
+        trendDiv.textContent = sentiment > 0.05 ? "🟢 Bullish sentiment" : sentiment < -0.05 ? "🔴 Bearish sentiment" : "🟡 Neutral sentiment";
 
-      exDays.forEach(n=>{
-        const exp = new Date(today); exp.setDate(exp.getDate()+n);
-        const days=(exp-today)/(1000*60*60*24), T=days/365;
-        const mv=stdDevMove(S,IV,days), strike=isCall?S+mv:S-mv;
-        const pr=bsPrice(S,strike,r,q,IV,T,isCall).toFixed(2);
-        const d2=(Math.log(S/strike)+(r-q-0.5*IV*IV)*T)/(IV*Math.sqrt(T));
-        const prob=(isCall?normCDF(d2):normCDF(-d2))*100;
-        body.insertAdjacentHTML("beforeend",
-          `<tr><td>${exp.toISOString().slice(0,10)}</td><td>${Math.round(days)}</td>`+
-          `<td>${mv.toFixed(2)}</td><td>${strike.toFixed(2)}</td><td>${pr}</td><td>${prob.toFixed(1)}</td></tr>`);
-      });
-      tbl.hidden=false;
+        // compute table for next 4 expirations
+        const exMap = {};
+        chain.forEach(c => {
+          if(!exMap[c.expiration_date]) exMap[c.expiration_date] = [];
+          exMap[c.expiration_date].push(c);
+        });
+        const exDates = Object.keys(exMap).sort().slice(0,4);
+
+        const body = tbl.querySelector("tbody"); body.innerHTML = "";
+        exDates.forEach(date=>{
+          const group = exMap[date];
+          const days = (new Date(date)-new Date())/(1000*60*60*24);
+          const mv = stdDevMove(S, IVinput||group[0].implied_volatility/100, days);
+          const strike = isCall? S+mv : S-mv;
+          const prem = bsPrice(S,strike,r,q,IVinput||group[0].implied_volatility/100,days/365,isCall).toFixed(2);
+          const d2 = (Math.log(S/strike)+(r-q-0.5*Math.pow(IVinput||group[0].implied_volatility/100,2))*(days/365))/( (IVinput||group[0].implied_volatility/100)*Math.sqrt(days/365) );
+          const prob = (isCall? normCDF(d2): normCDF(-d2))*100;
+          body.insertAdjacentHTML("beforeend",
+            `<tr><td>${date}</td><td>${Math.round(days)}</td><td>${mv.toFixed(2)}</td>`+
+            `<td>${strike.toFixed(2)}</td><td>${prem}</td><td>${prob.toFixed(1)}</td></tr>`);
+        });
+        tbl.hidden = false;
+      } catch(e) {
+        err.textContent = e.message;
+      }
     };
   </script></body>
 </html>
