@@ -1,10 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
+<!DOCTYPE html><html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Options Strike & Expiration Calculator</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Options Strike & Expiration Calculator</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; max-width: 600px; }
+    body { font-family: Arial, sans-serif; margin: 20px auto; max-width: 600px; }
     label, select, input, button { display: block; width: 100%; margin: 10px 0; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
     th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
@@ -12,20 +12,9 @@
   </style>
 </head>
 <body>
-  <h2>Options Strike & Expiration Suggestion</h2>
+  <h2>Options Strike & Expiration Suggestion</h2><label>Stock Price ($):<input type="number" id="stockPrice" step="0.01" /></label> <label>Implied Volatility (%):<input type="number" id="iv" step="0.1" /></label> <label>Trade Type: <select id="direction"> <option value="call">Call (Bullish)</option> <option value="put">Put (Bearish)</option> </select> </label> <button id="runBtn">Calculate Suggestions</button>
 
-  <label>Stock Price ($):<input type="number" id="stockPrice" step="0.01"></label>
-  <label>Implied Volatility (%):<input type="number" id="iv" step="0.1"></label>
-  <label>Trade Type:
-    <select id="direction">
-      <option value="call">Call (Bullish)</option>
-      <option value="put">Put (Bearish)</option>
-    </select>
-  </label>
-  <button id="runBtn">Calculate Suggestions</button>
-  <div id="error" class="error"></div>
-
-  <table id="results" hidden>
+  <div id="error" class="error"></div>  <table id="results" hidden>
     <thead>
       <tr>
         <th>Expiration</th>
@@ -37,84 +26,51 @@
       </tr>
     </thead>
     <tbody></tbody>
-  </table>
-
-  <script>
-    // === Black‑Scholes (standard implementation) ===
-    function normCDF(x) {
-      return (1 + Math.erf(x/Math.sqrt(2))) / 2;
+  </table>  <script>
+    // error‑function (erf) polyfill for normCDF
+    function erf(x) {
+      const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429, p=0.3275911;
+      const sign = x<0?-1:1; x = Math.abs(x);
+      const t = 1/(1+p*x);
+      const y = 1 - ((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t*Math.exp(-x*x);
+      return sign*y;
     }
-    function bsPrice(S, K, r, q, iv, T, isCall) {
-      const d1 = (Math.log(S/K) + (r - q + 0.5*iv*iv)*T) / (iv*Math.sqrt(T));
-      const d2 = d1 - iv*Math.sqrt(T);
-      if (isCall)
-        return S*Math.exp(-q*T)*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2);
-      else
-        return K*Math.exp(-r*T)*normCDF(-d2) - S*Math.exp(-q*T)*normCDF(-d1);
-    }
+    function normCDF(x) { return (1 + erf(x/Math.sqrt(2))) / 2; }
 
-    // === 1σ move over days ===
-    function stdDevMove(S, iv, days) {
-      return S * iv * Math.sqrt(days/365);
+    function bsPrice(S,K,r,q,iv,T,isCall) {
+      const d1=(Math.log(S/K)+(r-q+0.5*iv*iv)*T)/(iv*Math.sqrt(T));
+      const d2=d1-iv*Math.sqrt(T);
+      return isCall
+        ? S*Math.exp(-q*T)*normCDF(d1) - K*Math.exp(-r*T)*normCDF(d2)
+        : K*Math.exp(-r*T)*normCDF(-d2) - S*Math.exp(-q*T)*normCDF(-d1);
     }
+    function stdDevMove(S,iv,days){ return S*iv*Math.sqrt(days/365); }
 
-    // === Main ===
-    document.getElementById("runBtn").onclick = async () => {
+    document.getElementById("runBtn").onclick = () => {
       const S = parseFloat(document.getElementById("stockPrice").value);
       const IV = parseFloat(document.getElementById("iv").value)/100;
       const isCall = document.getElementById("direction").value === "call";
-      const errorDiv = document.getElementById("error");
-      const tbl = document.getElementById("results");
-      errorDiv.textContent = "";
-      tbl.hidden = true;
-      if (!S || !IV) {
-        errorDiv.textContent = "Please enter valid price and IV.";
-        return;
-      }
+      const err = document.getElementById("error"); err.textContent="";
+      const tbl = document.getElementById("results"); tbl.hidden=true;
+      if (!S || !IV) { err.textContent="Please enter valid price & IV."; return; }
 
-      // Example expirations – in practice fetch these from an API
       const today = new Date();
-      const exDates = [
-        addDays(today, 1),
-        addDays(today, 5),
-        addDays(today, 14),
-        addDays(today, 30),
-      ];
+      const exDays = [1,5,14,30];
+      const r=0.05, q=0;
+      const body = tbl.querySelector("tbody"); body.innerHTML = "";
 
-      const r = 0.05, q = 0.00;  // assume 5% interest, no dividend
-      const tbody = tbl.querySelector("tbody");
-      tbody.innerHTML = "";
-
-      exDates.forEach(exp => {
-        const days = (exp - today)/(1000*60*60*24);
-        const T = days/365;
-        const mv = stdDevMove(S, IV, days);
-        // for a 68%‐probability OTM, target strike = S ± mv
-        const strike = isCall ? S + mv : S - mv;
-        const premium = bsPrice(S, strike, r, q, IV, T, isCall).toFixed(2);
-        // prob of expiring ITM:
-        const d2 = (Math.log(S/strike) + (r - q - 0.5*IV*IV)*T)/(IV*Math.sqrt(T));
-        const probITM = (isCall ? normCDF(d2) : normCDF(-d2)) * 100;
-
-        const row = `<tr>
-          <td>${exp.toISOString().slice(0,10)}</td>
-          <td>${Math.round(days)}</td>
-          <td>${mv.toFixed(2)}</td>
-          <td>${strike.toFixed(2)}</td>
-          <td>${premium}</td>
-          <td>${probITM.toFixed(1)}</td>
-        </tr>`;
-        tbody.insertAdjacentHTML("beforeend", row);
+      exDays.forEach(n=>{
+        const exp = new Date(today); exp.setDate(exp.getDate()+n);
+        const days=(exp-today)/(1000*60*60*24), T=days/365;
+        const mv=stdDevMove(S,IV,days), strike=isCall?S+mv:S-mv;
+        const pr=bsPrice(S,strike,r,q,IV,T,isCall).toFixed(2);
+        const d2=(Math.log(S/strike)+(r-q-0.5*IV*IV)*T)/(IV*Math.sqrt(T));
+        const prob=(isCall?normCDF(d2):normCDF(-d2))*100;
+        body.insertAdjacentHTML("beforeend",
+          `<tr><td>${exp.toISOString().slice(0,10)}</td><td>${Math.round(days)}</td>`+
+          `<td>${mv.toFixed(2)}</td><td>${strike.toFixed(2)}</td><td>${pr}</td><td>${prob.toFixed(1)}</td></tr>`);
       });
-
-      tbl.hidden = false;
+      tbl.hidden=false;
     };
-
-    function addDays(d, n) {
-      const x = new Date(d);
-      x.setDate(d.getDate() + n);
-      return x;
-    }
-  </script>
-</body>
+  </script></body>
 </html>
